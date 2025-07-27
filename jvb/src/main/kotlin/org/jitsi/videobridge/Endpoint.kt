@@ -1009,9 +1009,17 @@ class Endpoint @JvmOverloads constructor(
                     val sourceEndpointId = packetInfo.endpointId
                     if (sourceEndpointId != null) {
                         val sourceEndpoint = conference.getEndpoint(sourceEndpointId)
-                        if (sourceEndpoint != null && !conference.speechActivity.isAmongLoudest(sourceEndpoint.id)) {
-                            // This endpoint is not among the loudest speakers, so don't forward the audio
-                            return false
+                        if (sourceEndpoint != null) {
+                            // Get the ordered list of endpoints by speech activity
+                            val orderedEndpoints = conference.speechActivity.orderedEndpoints
+                            
+                            // Find the position of the source endpoint in the ordered list
+                            val sourceIndex = orderedEndpoints.indexOfFirst { it.id == sourceEndpointId }
+                            
+                            // If the source endpoint is not among the first 'audioLastN' speakers, don't forward
+                            if (sourceIndex == -1 || sourceIndex >= audioLastN) {
+                                return false
+                            }
                         }
                     }
                 }
