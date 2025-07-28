@@ -1220,12 +1220,16 @@ public class Conference
     public boolean levelChanged(@NotNull AbstractEndpoint endpoint, long level)
     {
         SpeakerRanking ranking = speechActivity.levelChanged(endpoint, level);
+        
+        // Check if we should drop based on the loudest-only configuration
         if (ranking == null || !routeLoudestOnly)
             return false;
         if (ranking.isDominant && LoudestConfig.Companion.getAlwaysRouteDominant())
             return false;
         if (ranking.energyRanking < LoudestConfig.Companion.getNumLoudest())
             return false;
+        
+        // If we reach here, the packet should be dropped based on loudest-only config
         VideobridgeMetrics.tossedPacketsEnergy.getHistogram().observe(ranking.energyScore);
         return true;
     }

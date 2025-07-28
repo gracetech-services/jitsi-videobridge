@@ -99,6 +99,7 @@ import org.jitsi.videobridge.util.ByteBufferPool
 import org.jitsi.videobridge.util.TaskPools
 import org.jitsi.videobridge.util.looksLikeDtls
 import org.jitsi.videobridge.websocket.colibriWebSocketServiceSupplier
+import org.jitsi.videobridge.jvbAudioLastNSingleton
 import org.jitsi.xmpp.extensions.colibri.WebSocketPacketExtension
 import org.jitsi.xmpp.extensions.colibri2.Sctp
 import org.jitsi.xmpp.extensions.jingle.DtlsFingerprintPacketExtension
@@ -1062,12 +1063,35 @@ class Relay @JvmOverloads constructor(
         }
 
         return when (packet.packet) {
-            is VideoRtpPacket, is AudioRtpPacket, is RtcpSrPacket,
-            is RtcpFbPliPacket, is RtcpFbFirPacket -> {
+            is VideoRtpPacket, is RtcpSrPacket, is RtcpFbPliPacket, is RtcpFbFirPacket -> {
                 // We assume that we are only given PLIs/FIRs destined for this
                 // endpoint. This is because Conference has to find the target
                 // endpoint (belonging to this relay) anyway, and we would essentially be
                 // performing the same check twice.
+                true
+            }
+            is AudioRtpPacket -> {
+                // Check if this endpoint is among the loudest speakers based on audio last-n
+                val audioLastN = jvbAudioLastNSingleton.get()
+                if (audioLastN != -1) {
+                    // Check if the source endpoint is among the loudest speakers
+                    val sourceEndpointId = packet.endpointId
+                    if (sourceEndpointId != null) {
+                        val sourceEndpoint = conference.getEndpoint(sourceEndpointId)
+                        if (sourceEndpoint != null) {
+                            // Get the ordered list of endpoints by speech activity
+                            val orderedEndpoints = conference.speechActivity.orderedEndpoints
+                            
+                            // Find the position of the source endpoint in the ordered list
+                            val sourceIndex = orderedEndpoints.indexOfFirst { it.id == sourceEndpointId }
+                            
+                            // If the source endpoint is not among the first 'audioLastN' speakers, don't forward
+                            if (sourceIndex == -1 || sourceIndex >= audioLastN) {
+                                return false
+                            }
+                        }
+                    }
+                }
                 true
             }
             else -> {
