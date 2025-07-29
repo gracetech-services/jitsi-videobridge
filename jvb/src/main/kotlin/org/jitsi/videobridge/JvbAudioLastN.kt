@@ -39,4 +39,4 @@ val jvbAudioLastNSingleton: JvbAudioLastN = JvbAudioLastN()
 fun calculateAudioLastN(vararg audioLastN: Int): Int {
     val min = audioLastN.map { if (it == -1) Int.MAX_VALUE else it }.minOrNull() ?: Int.MAX_VALUE
     return if (min == Int.MAX_VALUE) -1 else min
-} 
+}

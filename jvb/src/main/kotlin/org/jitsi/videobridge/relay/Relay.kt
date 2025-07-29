@@ -83,6 +83,7 @@ import org.jitsi.videobridge.datachannel.protocol.DataChannelProtocolConstants
 import org.jitsi.videobridge.dcsctp.DcSctpBaseCallbacks
 import org.jitsi.videobridge.dcsctp.DcSctpHandler
 import org.jitsi.videobridge.dcsctp.DcSctpTransport
+import org.jitsi.videobridge.jvbAudioLastNSingleton
 import org.jitsi.videobridge.message.BridgeChannelMessage
 import org.jitsi.videobridge.message.SourceVideoTypeMessage
 import org.jitsi.videobridge.metrics.QueueMetrics
@@ -99,7 +100,6 @@ import org.jitsi.videobridge.util.ByteBufferPool
 import org.jitsi.videobridge.util.TaskPools
 import org.jitsi.videobridge.util.looksLikeDtls
 import org.jitsi.videobridge.websocket.colibriWebSocketServiceSupplier
-import org.jitsi.videobridge.jvbAudioLastNSingleton
 import org.jitsi.xmpp.extensions.colibri.WebSocketPacketExtension
 import org.jitsi.xmpp.extensions.colibri2.Sctp
 import org.jitsi.xmpp.extensions.jingle.DtlsFingerprintPacketExtension
@@ -1063,7 +1063,8 @@ class Relay @JvmOverloads constructor(
         }
 
         return when (packet.packet) {
-            is VideoRtpPacket, is RtcpSrPacket, is RtcpFbPliPacket, is RtcpFbFirPacket -> {
+            is VideoRtpPacket, is RtcpSrPacket,
+            is RtcpFbPliPacket, is RtcpFbFirPacket -> {
                 // We assume that we are only given PLIs/FIRs destined for this
                 // endpoint. This is because Conference has to find the target
                 // endpoint (belonging to this relay) anyway, and we would essentially be
@@ -1071,22 +1072,17 @@ class Relay @JvmOverloads constructor(
                 true
             }
             is AudioRtpPacket -> {
-                // Check if this endpoint is among the loudest speakers based on audio last-n
+                // Check audio last N logic
                 val audioLastN = jvbAudioLastNSingleton.get()
                 if (audioLastN != -1) {
-                    // Check if the source endpoint is among the loudest speakers
+                    // If audio last N is enabled, check if the source is among the top N loudest speakers
                     val sourceEndpointId = packet.endpointId
                     if (sourceEndpointId != null) {
                         val sourceEndpoint = conference.getEndpoint(sourceEndpointId)
                         if (sourceEndpoint != null) {
-                            // Get the ordered list of endpoints by speech activity
-                            val orderedEndpoints = conference.speechActivity.orderedEndpoints
-                            
-                            // Find the position of the source endpoint in the ordered list
-                            val sourceIndex = orderedEndpoints.indexOfFirst { it.id == sourceEndpointId }
-                            
-                            // If the source endpoint is not among the first 'audioLastN' speakers, don't forward
-                            if (sourceIndex == -1 || sourceIndex >= audioLastN) {
+                            val topNSpeakers = conference.speechActivity.orderedEndpoints.take(audioLastN)
+                            val isInTopN = topNSpeakers.any { it.id == sourceEndpointId }
+                            if (!isInTopN) {
                                 return false
                             }
                         }

@@ -54,4 +54,4 @@ class JvbAudioLastNTest : ShouldSpec({
             jvbAudioLastN.get() shouldBe 5
         }
     }
-}) 
+})

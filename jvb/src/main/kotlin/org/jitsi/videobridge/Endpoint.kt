@@ -99,28 +99,10 @@ import java.security.SecureRandom
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
-import java.util.function.Consumer
-import java.util.function.Supplier
-import java.util.stream.Collectors
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
-import kotlin.math.sqrt
-import kotlin.random.Random
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
-import kotlin.time.toJavaDuration
-import org.jitsi.videobridge.jvbAudioLastNSingleton
-import org.jitsi.videobridge.sctp.SctpConfig.Companion.config as sctpConfig
 import java.util.Optional
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+import org.jitsi.videobridge.sctp.SctpConfig.Companion.config as sctpConfig
 
 /**
  * Models a local endpoint (participant) in a [Conference]
@@ -1002,22 +984,17 @@ class Endpoint @JvmOverloads constructor(
                     return false
                 }
 
-                // Check if this endpoint is among the loudest speakers based on audio last-n
+                // Check audio last N logic
                 val audioLastN = jvbAudioLastNSingleton.get()
                 if (audioLastN != -1) {
-                    // Check if the source endpoint is among the loudest speakers
+                    // If audio last N is enabled, check if the source is among the top N loudest speakers
                     val sourceEndpointId = packetInfo.endpointId
                     if (sourceEndpointId != null) {
                         val sourceEndpoint = conference.getEndpoint(sourceEndpointId)
                         if (sourceEndpoint != null) {
-                            // Get the ordered list of endpoints by speech activity
-                            val orderedEndpoints = conference.speechActivity.orderedEndpoints
-                            
-                            // Find the position of the source endpoint in the ordered list
-                            val sourceIndex = orderedEndpoints.indexOfFirst { it.id == sourceEndpointId }
-                            
-                            // If the source endpoint is not among the first 'audioLastN' speakers, don't forward
-                            if (sourceIndex == -1 || sourceIndex >= audioLastN) {
+                            val topNSpeakers = conference.speechActivity.orderedEndpoints.take(audioLastN)
+                            val isInTopN = topNSpeakers.any { it.id == sourceEndpointId }
+                            if (!isInTopN) {
                                 return false
                             }
                         }
