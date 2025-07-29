@@ -23,9 +23,11 @@ import org.jitsi.utils.logging.DiagnosticContext
 import org.jitsi.utils.logging.TimeSeriesLogger
 import org.jitsi.utils.logging2.Logger
 import org.jitsi.utils.logging2.LoggerImpl
+import org.jitsi.utils.logging2.createChildLogger
 import org.jitsi.videobridge.cc.config.BitrateControllerConfig.Companion.config
 import java.lang.Integer.max
 import java.time.Clock
+import kotlin.math.min
 
 /**
  * A bitrate allocation that pertains to a specific source. This is the internal representation used in the allocation
@@ -43,8 +45,12 @@ internal class SingleSourceAllocation(
     private val onStage: Boolean,
     diagnosticContext: DiagnosticContext,
     clock: Clock,
-    val logger: Logger = LoggerImpl(SingleSourceAllocation::class.qualifiedName)
+    parentLogger: Logger = LoggerImpl(SingleSourceAllocation::class.qualifiedName)
 ) {
+    val logger = createChildLogger(parentLogger).apply {
+        addContext(mapOf("remote_endpoint_id" to endpointId))
+    }
+
     /**
      * The immutable list of layers to be considered when allocating bandwidth.
      */
@@ -123,7 +129,7 @@ internal class SingleSourceAllocation(
         // `maxOversendBitrate`.
         if (allowOversending && layers.oversendIndex >= 0 && targetIdx < layers.oversendIndex) {
             for (i in layers.oversendIndex downTo targetIdx + 1) {
-                if (layers[i].bitrate <= maxBps + config.maxOversendBitrateBps()) {
+                if (layers[i].bitrate <= maxBps + config.maxOversendBitrate.bps) {
                     targetIdx = i
                 }
             }
@@ -236,7 +242,7 @@ internal class SingleSourceAllocation(
             }
         }
 
-        val oversendIdx = if (onStage && config.allowOversendOnStage()) {
+        val oversendIdx = if (onStage && config.allowOversendOnStage) {
             val maxHeight = selectedLayers.maxOfOrNull { it.layer.height } ?: return Layers.noLayers
             // Of all layers with the highest resolution select the one with lowest bitrate. In case of VP9 the layers
             // are not necessarily ordered by bitrate.
@@ -269,7 +275,16 @@ internal class SingleSourceAllocation(
         if (constraints.maxHeight == 0 || !source.hasRtpLayers()) {
             return Layers.noLayers
         }
-        val layers = source.rtpLayers.map { LayerSnapshot(it, it.getBitrateBps(nowMs)) }
+        val layers = source.rtpLayers.map {
+            LayerSnapshot(
+                it,
+                if (config.useVlaTargetBitrate) {
+                    it.targetBitrate?.bps ?: it.getBitrate(nowMs).bps
+                } else {
+                    it.getBitrate(nowMs).bps
+                }
+            )
+        }
 
         return when (source.videoType) {
             VideoType.CAMERA -> selectLayersForCamera(layers, constraints)
@@ -285,9 +300,15 @@ internal class SingleSourceAllocation(
      * oversending.
      */
     private fun selectLayersForCamera(layers: List<LayerSnapshot>, constraints: VideoConstraints): Layers {
-        val minHeight = layers.map { it.layer.height }.minOrNull() ?: return Layers.noLayers
+        val minHeight = layers.minOfOrNull { it.layer.height } ?: return Layers.noLayers
+        val maxFps = layers.maxOfOrNull { it.layer.frameRate } ?: return Layers.noLayers
         val noActiveLayers = layers.none { (_, bitrate) -> bitrate > 0 }
         val (preferredHeight, preferredFps) = getPreferred(constraints)
+        val effectivePreferredFps = if (maxFps > 0) {
+            min(maxFps, preferredFps)
+        } else {
+            preferredFps
+        }
 
         val ratesList: MutableList<LayerSnapshot> = ArrayList()
         // Initialize the list of layers to be considered. These are the layers that satisfy the constraints, with
@@ -297,7 +318,7 @@ internal class SingleSourceAllocation(
             val lessThanPreferredHeight = layer.height < preferredHeight
             val lessThanOrEqualMaxHeight = layer.height <= constraints.maxHeight || !constraints.heightIsLimited()
             // If frame rate is unknown, consider it to be sufficient.
-            val atLeastPreferredFps = layer.frameRate < 0 || layer.frameRate >= preferredFps
+            val atLeastPreferredFps = layer.frameRate < 0 || layer.frameRate >= effectivePreferredFps
             if (lessThanPreferredHeight ||
                 (lessThanOrEqualMaxHeight && atLeastPreferredFps) ||
                 layer.height == minHeight
@@ -312,6 +333,11 @@ internal class SingleSourceAllocation(
 
         val effectivePreferredHeight = max(preferredHeight, minHeight)
         val preferredIndex = ratesList.lastIndexWhich { it.layer.height <= effectivePreferredHeight }
+        logger.trace {
+            "Selected rates list $ratesList, preferred index $preferredIndex " +
+                "from layers $layers with constraints $constraints"
+        }
+
         return Layers(ratesList, preferredIndex, -1)
     }
 
@@ -339,7 +365,7 @@ private fun <T> List<T>.lastIndexWhich(predicate: (T) -> Boolean): Int {
  */
 private fun getPreferred(constraints: VideoConstraints): VideoConstraints {
     return if (constraints.maxHeight > 180 || !constraints.heightIsLimited()) {
-        VideoConstraints(config.onstagePreferredHeightPx(), config.onstagePreferredFramerate())
+        VideoConstraints(config.onstagePreferredHeightPx, config.onstagePreferredFramerate)
     } else {
         VideoConstraints.UNLIMITED
     }

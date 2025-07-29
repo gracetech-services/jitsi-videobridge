@@ -16,7 +16,7 @@
 package org.jitsi.nlj.rtp
 
 import org.jitsi.nlj.util.ArrayCache
-import org.jitsi.nlj.util.Rfc3711IndexTracker
+import org.jitsi.nlj.util.RtpSequenceIndexTracker
 import org.jitsi.rtp.rtp.RtpPacket
 import org.jitsi.rtp.util.isNewerThan
 
@@ -108,7 +108,7 @@ class ResumableStreamRewriter(val keepHistory: Boolean = false) {
 
     private class RewriteHistoryItem(
         var accept: Boolean?,
-        val newIndex: Int
+        val newIndex: Long
     )
 
     private class StreamRewriteHistory(highestSeqSent: Int) : ArrayCache<RewriteHistoryItem>(
@@ -118,14 +118,14 @@ class ResumableStreamRewriter(val keepHistory: Boolean = false) {
         /* Caller should have this object synchronized if needed. */
         synchronize = false
     ) {
-        var firstIndex: Int = -1
+        var firstIndex: Long = -1L
 
         var gapsLeft = 0
             private set
 
-        private val rfc3711IndexTracker = Rfc3711IndexTracker()
+        private val rtpSequenceIndexTracker = RtpSequenceIndexTracker()
 
-        private fun fillBetween(start: Int, end: Int, firstNewIndex: Int) {
+        private fun fillBetween(start: Long, end: Long, firstNewIndex: Long) {
             if (end <= lastIndex - size + 1) {
                 return
             }
@@ -144,12 +144,12 @@ class ResumableStreamRewriter(val keepHistory: Boolean = false) {
         }
 
         fun rewriteSequenceNumber(accept: Boolean, sequenceNumber: Int): Int {
-            val index = rfc3711IndexTracker.update(sequenceNumber)
+            val index = rtpSequenceIndexTracker.update(sequenceNumber)
 
-            val newIndex: Int
+            val newIndex: Long
 
             when {
-                (firstIndex == -1) -> {
+                (firstIndex == -1L) -> {
                     /* First index seen. */
                     insertItem(RewriteHistoryItem(accept, index), index)
 
@@ -253,7 +253,7 @@ class ResumableStreamRewriter(val keepHistory: Boolean = false) {
             private const val MAX_REWRITE_HISTORY = 1000
 
             /** Map an index back to a sequence number. */
-            private fun toSequenceNumber(index: Int): Int = index and 0xffff
+            private fun toSequenceNumber(index: Long): Int = (index and 0xffff).toInt()
         }
     }
 }

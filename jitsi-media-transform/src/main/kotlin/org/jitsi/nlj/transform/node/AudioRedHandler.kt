@@ -19,6 +19,7 @@ package org.jitsi.nlj.transform.node
 import org.jitsi.config.JitsiConfig
 import org.jitsi.metaconfig.config
 import org.jitsi.nlj.PacketInfo
+import org.jitsi.nlj.PacketOrigin
 import org.jitsi.nlj.format.AudioRedPayloadType
 import org.jitsi.nlj.rtp.AudioRtpPacket
 import org.jitsi.nlj.rtp.RedAudioRtpPacket
@@ -85,6 +86,16 @@ class AudioRedHandler(
         addNumber("lost_packets_recovered", stats.lostPacketsRecovered)
         addNumber("redundancy_packets_added", stats.redundancyPacketsAdded)
         addNumber("invalid_red_packets_dropped", stats.invalidRedPacketsDropped)
+    }
+
+    override fun statsJson() = super.statsJson().apply {
+        this["red_packets_decapsulated"] = stats.redPacketsDecapsulated
+        this["red_packets_forwarded"] = stats.redPacketsForwarded
+        this["audio_packets_encapsulated"] = stats.audioPacketsEncapsulated
+        this["audio_packets_forwarded"] = stats.audioPacketsForwarded
+        this["lost_packets_recovered"] = stats.lostPacketsRecovered
+        this["redundancy_packets_added"] = stats.redundancyPacketsAdded
+        this["invalid_red_packets_dropped"] = stats.invalidRedPacketsDropped
     }
 
     override fun stop() = super.stop().also {
@@ -237,7 +248,9 @@ class AudioRedHandler(
                                 if ((it.sequenceNumber == prev && prevMissing) ||
                                     (it.sequenceNumber == prev2 && prev2Missing)
                                 ) {
-                                    add(PacketInfo(it))
+                                    val packetInfo = PacketInfo(it)
+                                    packetInfo.packetOrigin = PacketOrigin.Synthesized
+                                    add(packetInfo)
                                     stats.lostPacketRecovered()
                                 }
                                 sentAudioCache.insert(it)

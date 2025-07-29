@@ -69,8 +69,8 @@ class Av1DDRtpLayerDesc(
     /**
      * Extracts a [NodeStatsBlock] from an [RtpLayerDesc].
      */
-    override fun getNodeStats() = super.getNodeStats().apply {
-        addNumber("dt", dt)
+    override fun debugState() = super.debugState().apply {
+        this["dt"] = dt
     }
 
     override fun indexString(): String = indexString(index)
@@ -79,8 +79,7 @@ class Av1DDRtpLayerDesc(
      * {@inheritDoc}
      */
     override fun toString(): String {
-        return "subjective_quality=" + index +
-            ",DT=" + dt
+        return "subjective_quality=$index,DT=$dt,height=$height,frameRate=$frameRate"
     }
 
     companion object {

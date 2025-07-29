@@ -15,7 +15,6 @@
  */
 package org.jitsi.nlj
 
-import org.jitsi.nlj.stats.NodeStatsBlock
 import org.jitsi.nlj.transform.node.incoming.BitrateCalculator
 import org.jitsi.nlj.util.Bandwidth
 import org.jitsi.nlj.util.BitrateTracker
@@ -28,8 +27,7 @@ import org.jitsi.utils.OrderedJsonObject
  *
  * @author George Politis
  */
-abstract class RtpLayerDesc
-constructor(
+abstract class RtpLayerDesc(
     /**
      * The index of this instance's encoding in the source encoding array.
      */
@@ -43,10 +41,13 @@ constructor(
      */
     val sid: Int,
     /**
-     * The max height of the bitstream that this instance represents. The actual
+     * The max "height" of the bitstream that this instance represents. The actual
      * height may be less due to bad network or system load.  [NO_HEIGHT] for unknown.
      *
-     * XXX we should be able to sniff the actual height from the RTP packets.
+     * In order to handle portrait-mode video correctly, this should actually be the smaller of
+     * the bitstream's height or width.
+     *
+     * Where possible we sniff the actual height from the RTP packets.
      */
     var height: Int,
     /**
@@ -54,7 +55,7 @@ constructor(
      * represents. The actual frame rate may be less due to bad network or
      * system load.  [NO_FRAME_RATE] for unknown.
      */
-    val frameRate: Double,
+    var frameRate: Double,
 ) {
     abstract fun copy(height: Int = this.height, tid: Int = this.tid, inherit: Boolean = true): RtpLayerDesc
 
@@ -62,6 +63,8 @@ constructor(
      * The [BitrateTracker] instance used to calculate the receiving bitrate of this RTP layer.
      */
     protected var bitrateTracker = BitrateCalculator.createBitrateTracker()
+
+    var targetBitrate: Bandwidth? = null
 
     /**
      * @return the "id" of this layer within this encoding. This is a server-side id and should
@@ -87,6 +90,7 @@ constructor(
      */
     internal open fun inheritFrom(other: RtpLayerDesc) {
         inheritStatistics(other.bitrateTracker)
+        targetBitrate = other.targetBitrate
     }
 
     /**
@@ -111,29 +115,20 @@ constructor(
     abstract fun getBitrate(nowMs: Long): Bandwidth
 
     /**
-     * Expose [getBitrate] as a [Double] in order to make it accessible from java (since [Bandwidth] is an inline
-     * class).
-     */
-    fun getBitrateBps(nowMs: Long): Double = getBitrate(nowMs).bps
-
-    /**
      * Recursively checks this layer and its dependencies to see if the bitrate is zero.
      * Note that unlike [calcBitrate] this does not avoid double-visiting layers; the overhead
      * of the hash table is usually more than the cost of any double-visits.
      */
     abstract fun hasZeroBitrate(nowMs: Long): Boolean
 
-    /**
-     * Extracts a [NodeStatsBlock] from an [RtpLayerDesc].
-     */
-    open fun getNodeStats() = NodeStatsBlock(indexString()).apply {
-        addNumber("frameRate", frameRate)
-        addNumber("height", height)
-        addNumber("index", index)
-        addNumber("bitrate_bps", getBitrate(System.currentTimeMillis()).bps)
+    open fun debugState(): OrderedJsonObject = OrderedJsonObject().apply {
+        this["frameRate"] = frameRate
+        this["height"] = height
+        this["index"] = index
+        this["bitrate_bps"] = getBitrate(System.currentTimeMillis()).bps
+        this["target_bitrate"] = targetBitrate?.bps ?: 0
+        this["indexString"] = indexString()
     }
-
-    fun debugState(): OrderedJsonObject = getNodeStats().toJson().apply { put("indexString", indexString()) }
 
     abstract fun indexString(): String
 

@@ -1,5 +1,5 @@
 /*
- * Copyright @ 2018 - present 8x8, Inc.
+ * Copyright @ 2018 - Present, 8x8 Inc
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,22 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jitsi.nlj.rtp.bandwidthestimation
+package org.jitsi.videobridge
 
 import org.jitsi.config.JitsiConfig
 import org.jitsi.metaconfig.config
-import org.jitsi.nlj.util.Bandwidth
+import org.jitsi.metaconfig.from
+import java.time.Duration
 
-class GoogleCcEstimatorConfig {
+class ConnectionStatsConfig private constructor() {
     companion object {
-        val minBw: Bandwidth by config {
-            "jmt.bwe.google-cc.min-bw".from(JitsiConfig.newConfig)
-                .convertFrom<String> { Bandwidth.fromString(it) }
-        }
-
-        val maxBw: Bandwidth by config {
-            "jmt.bwe.google-cc.max-bw".from(JitsiConfig.newConfig)
-                .convertFrom<String> { Bandwidth.fromString(it) }
-        }
+        val enabled: Boolean by config(
+            "videobridge.connection-stats.enabled".from(JitsiConfig.newConfig)
+        )
+        val interval: Duration by config(
+            "videobridge.connection-stats.interval".from(JitsiConfig.newConfig)
+        )
     }
 }

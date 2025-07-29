@@ -18,6 +18,7 @@ package org.jitsi.nlj
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings
 import org.jitsi.config.JitsiConfig
 import org.jitsi.metaconfig.config
+import org.jitsi.nlj.format.PayloadType
 import org.jitsi.rtp.Packet
 import org.jitsi.utils.logging2.createLogger
 import java.time.Clock
@@ -91,6 +92,22 @@ class EventTimeline(
 }
 
 /**
+ * The origin of a packet in the system; used to track outgoing packets in [OutgoingStatisticsTracker]
+ * to measure the bitrates of each type of data.
+ *
+ * Currently only used for RTP, so RTCP, SCTP, and Datachannel will all be either Routed or Misc.
+ */
+enum class PacketOrigin {
+    Routed,
+    Retransmission,
+    Probing,
+    Padding,
+    Synthesized,
+    Misc
+    /* TODO: Add RTCP, SCTP, and datachannel if needed */
+}
+
+/**
  * [PacketInfo] is a wrapper around a [Packet] instance to be passed through
  * a pipeline.  Since the [Packet] can change as it moves through the pipeline
  * (as it is parsed into different types), the wrapping [PacketInfo] stays consistent
@@ -134,11 +151,24 @@ open class PacketInfo @JvmOverloads constructor(
      */
     var layeringChanged = false
 
+    var payloadType: PayloadType? = null
+
     /**
      * The payload verification string for the packet, or 'null' if payload verification is disabled. Calculating the
      * it is expensive, thus we only do it when the flag is enabled.
      */
     var payloadVerification = if (enablePayloadVerification) packet.payloadVerification else null
+
+    /**
+     * Information about whether this packet is used for probing by the transport-cc engine.
+     * The type is internal to that object.
+     */
+    var probingInfo: Any? = null
+
+    /**
+     * The origin of the packet, used for tracking the sources of media being routed.
+     */
+    var packetOrigin: PacketOrigin = PacketOrigin.Misc
 
     /**
      * Re-calculates the expected payload verification string. This should be called any time that the code
@@ -167,10 +197,13 @@ open class PacketInfo @JvmOverloads constructor(
         clone.originalHadCryptex = originalHadCryptex
         clone.shouldDiscard = shouldDiscard
         clone.endpointId = endpointId
+        clone.payloadType = payloadType
         clone.layeringChanged = layeringChanged
         clone.payloadVerification = payloadVerification
+        clone.probingInfo = probingInfo
+        clone.packetOrigin = packetOrigin
         @Suppress("UNCHECKED_CAST") // ArrayList.clone() really does return ArrayList, not Object.
-        clone.onSentActions = onSentActions?.clone() as ArrayList<() -> Unit>?
+        clone.onSentActions = onSentActions?.clone() as ArrayList<(PacketInfo) -> Unit>?
         return clone
     }
 
@@ -179,7 +212,7 @@ open class PacketInfo @JvmOverloads constructor(
     /**
      * The list of pending actions, or [null] if none.
      */
-    private var onSentActions: ArrayList<() -> Unit>? = null
+    private var onSentActions: ArrayList<(PacketInfo) -> Unit>? = null
 
     /**
      * Add an action to be performed when the packet is sent (i.e. when this packet's
@@ -189,7 +222,7 @@ open class PacketInfo @JvmOverloads constructor(
      * cloned instance.  If packet is dropped (i.e. [sent] is never called), the
      * action will not be called.
      */
-    fun onSent(action: () -> Unit) {
+    fun onSent(action: (PacketInfo) -> Unit) {
         synchronized(this) {
             if (onSentActions == null) {
                 onSentActions = ArrayList(1)
@@ -203,7 +236,7 @@ open class PacketInfo @JvmOverloads constructor(
      * method.  This should be called just before, or after, this packet is sent.
      */
     fun sent() {
-        var actions: List<() -> Unit> = Collections.emptyList()
+        var actions: List<(PacketInfo) -> Unit> = Collections.emptyList()
         synchronized(this) {
             onSentActions?.let {
                 actions = it
@@ -211,7 +244,7 @@ open class PacketInfo @JvmOverloads constructor(
             } ?: run { return@sent }
         }
         for (action in actions) {
-            action.invoke()
+            action.invoke(this)
         }
     }
 

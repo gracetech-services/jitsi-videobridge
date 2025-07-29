@@ -17,6 +17,7 @@ package org.jitsi.videobridge.message
 
 import com.fasterxml.jackson.annotation.JsonAnyGetter
 import com.fasterxml.jackson.annotation.JsonAnySetter
+import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonInclude
@@ -58,7 +59,9 @@ import java.util.concurrent.atomic.AtomicLong
     JsonSubTypes.Type(value = RemoveReceiverMessage::class, name = RemoveReceiverMessage.TYPE),
     JsonSubTypes.Type(value = ReceiverVideoConstraintsMessage::class, name = ReceiverVideoConstraintsMessage.TYPE),
     JsonSubTypes.Type(value = SourceVideoTypeMessage::class, name = SourceVideoTypeMessage.TYPE),
-    JsonSubTypes.Type(value = VideoTypeMessage::class, name = VideoTypeMessage.TYPE)
+    JsonSubTypes.Type(value = ConnectionStats::class, name = ConnectionStats.TYPE),
+    JsonSubTypes.Type(value = VideoTypeMessage::class, name = VideoTypeMessage.TYPE),
+    JsonSubTypes.Type(value = ReceiverAudioSubscriptionMessage::class, name = ReceiverAudioSubscriptionMessage.TYPE)
 )
 sealed class BridgeChannelMessage {
     private val jsonCacheDelegate = ResettableLazy { createJson() }
@@ -121,7 +124,9 @@ open class MessageHandler {
             is RemoveReceiverMessage -> removeReceiver(message)
             is ReceiverVideoConstraintsMessage -> receiverVideoConstraints(message)
             is SourceVideoTypeMessage -> sourceVideoType(message)
+            is ConnectionStats -> connectionStats(message)
             is VideoTypeMessage -> videoType(message)
+            is ReceiverAudioSubscriptionMessage -> receiverAudioSubscription(message)
         }
     }
 
@@ -146,7 +151,9 @@ open class MessageHandler {
     open fun removeReceiver(message: RemoveReceiverMessage) = unhandledMessageReturnNull(message)
     open fun receiverVideoConstraints(message: ReceiverVideoConstraintsMessage) = unhandledMessageReturnNull(message)
     open fun sourceVideoType(message: SourceVideoTypeMessage) = unhandledMessageReturnNull(message)
+    open fun connectionStats(message: ConnectionStats) = unhandledMessageReturnNull(message)
     open fun videoType(message: VideoTypeMessage) = unhandledMessageReturnNull(message)
+    open fun receiverAudioSubscription(message: ReceiverAudioSubscriptionMessage) = unhandledMessageReturnNull(message)
 
     fun getReceivedCounts() = receivedCounts.mapValues { it.value.get() }
 }
@@ -472,6 +479,51 @@ class SourceVideoTypeMessage(
 
     companion object {
         const val TYPE = "SourceVideoTypeMessage"
+    }
+}
+
+/*
+ * A message sent from a client to the bridge to indicate which audio sources it wants to receive.
+ */
+sealed class ReceiverAudioSubscriptionMessage : BridgeChannelMessage() {
+    object All : ReceiverAudioSubscriptionMessage() {
+        override fun createJson(): String {
+            return """{"colibriClass":"$TYPE","mode":"All"}"""
+        }
+    }
+    object None : ReceiverAudioSubscriptionMessage() {
+        override fun createJson(): String {
+            return """{"colibriClass":"$TYPE","mode":"None"}"""
+        }
+    }
+    data class Include(val list: List<String>) : ReceiverAudioSubscriptionMessage()
+    data class Exclude(val list: List<String>) : ReceiverAudioSubscriptionMessage()
+    companion object {
+        const val TYPE = "ReceiverAudioSubscription"
+
+        @JvmStatic
+        @JsonCreator
+        fun jsonCreator(mode: String, list: List<String>? = null): ReceiverAudioSubscriptionMessage {
+            return when (mode) {
+                "All" -> All
+                "None" -> None
+                "Include" -> Include(list ?: emptyList())
+                "Exclude" -> Exclude(list ?: emptyList())
+                else -> throw IllegalArgumentException("Unknown ReceiverAudioSubscription mode: $mode")
+            }
+        }
+    }
+}
+
+/**
+ * A message from the bridge to an endpoint giving information about the connection to the bridge
+ * (that the client can't determine on its own)
+ */
+class ConnectionStats(
+    val estimatedDownlinkBandwidth: Long,
+) : BridgeChannelMessage() {
+    companion object {
+        const val TYPE = "ConnectionStats"
     }
 }
 

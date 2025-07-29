@@ -20,7 +20,7 @@ import org.jitsi.nlj.PacketInfo
 import org.jitsi.nlj.RtpLayerDesc
 import org.jitsi.nlj.rtp.codec.av1.Av1DDPacket
 import org.jitsi.nlj.rtp.codec.av1.Av1DDRtpLayerDesc.Companion.getIndex
-import org.jitsi.nlj.util.Rfc3711IndexTracker
+import org.jitsi.nlj.util.RtpSequenceIndexTracker
 import org.jitsi.rtp.rtcp.RtcpSrPacket
 import org.jitsi.rtp.rtcp.RtcpSrPacketBuilder
 import org.jitsi.rtp.rtp.RtpPacket
@@ -53,6 +53,7 @@ class Av1DDAdaptiveSourceProjectionTest {
         val context = Av1DDAdaptiveSourceProjectionContext(
             diagnosticContext,
             initialState,
+            null,
             logger
         )
         val generator = ScalableAv1PacketGenerator(1)
@@ -75,6 +76,7 @@ class Av1DDAdaptiveSourceProjectionTest {
         val context = Av1DDAdaptiveSourceProjectionContext(
             diagnosticContext,
             initialState,
+            null,
             logger
         )
         var expectedSeq = 10001
@@ -350,8 +352,8 @@ class Av1DDAdaptiveSourceProjectionTest {
     private class ProjectedPacket constructor(
         val packet: Av1DDPacket,
         val origSeq: Int,
-        val extOrigSeq: Int,
-        val extFrameNum: Int,
+        val extOrigSeq: Long,
+        val extFrameNum: Long,
     )
 
     /** Run an out-of-order test on a single stream, randomized order except for the first
@@ -378,14 +380,15 @@ class Av1DDAdaptiveSourceProjectionTest {
         val context = Av1DDAdaptiveSourceProjectionContext(
             diagnosticContext,
             initialState,
+            null,
             logger
         )
         var latestSeq = buffer[0].packetAs<Av1DDPacket>().sequenceNumber
-        val projectedPackets = TreeMap<Int, ProjectedPacket>()
-        val origSeqIdxTracker = Rfc3711IndexTracker()
-        val newSeqIdxTracker = Rfc3711IndexTracker()
-        val frameNumsDropped = HashSet<Int>()
-        val frameNumsIndexTracker = Rfc3711IndexTracker()
+        val projectedPackets = TreeMap<Long, ProjectedPacket>()
+        val origSeqIdxTracker = RtpSequenceIndexTracker()
+        val newSeqIdxTracker = RtpSequenceIndexTracker()
+        val frameNumsDropped = HashSet<Long>()
+        val frameNumsIndexTracker = RtpSequenceIndexTracker()
         for (i in 0..99999) {
             val packetInfo = buffer[0]
             val packet = packetInfo.packetAs<Av1DDPacket>()
@@ -433,7 +436,7 @@ class Av1DDAdaptiveSourceProjectionTest {
                 buffer.shuffle(random)
             }
         }
-        val frameNumsSeen = HashSet<Int>()
+        val frameNumsSeen = HashSet<Long>()
 
         /* Add packets that weren't added yet, or that were dropped for being too old, to frameNumsSeen. */
         frameNumsSeen.addAll(frameNumsDropped)
@@ -769,6 +772,7 @@ class Av1DDAdaptiveSourceProjectionTest {
         val context = Av1DDAdaptiveSourceProjectionContext(
             diagnosticContext,
             initialState,
+            null,
             logger
         )
         val firstPacketInfo = generator.nextPacket()
@@ -796,6 +800,7 @@ class Av1DDAdaptiveSourceProjectionTest {
         val context = Av1DDAdaptiveSourceProjectionContext(
             diagnosticContext,
             initialState,
+            null,
             logger
         )
         val firstPacketInfo = generator.nextPacket()
@@ -825,7 +830,7 @@ class Av1DDAdaptiveSourceProjectionTest {
         val diagnosticContext = DiagnosticContext()
         diagnosticContext["test"] = "twoStreamsNoSwitchingTest"
         val initialState = RtpState(1, 10000, 1000000)
-        val context = Av1DDAdaptiveSourceProjectionContext(diagnosticContext, initialState, logger)
+        val context = Av1DDAdaptiveSourceProjectionContext(diagnosticContext, initialState, null, logger)
         val targetIndex = getIndex(eid = 1, dt = 2)
         var expectedSeq = 10001
         var expectedTs: Long = 1003000
@@ -854,7 +859,7 @@ class Av1DDAdaptiveSourceProjectionTest {
         val diagnosticContext = DiagnosticContext()
         diagnosticContext["test"] = "twoStreamsSwitchingTest"
         val initialState = RtpState(1, 10000, 1000000)
-        val context = Av1DDAdaptiveSourceProjectionContext(diagnosticContext, initialState, logger)
+        val context = Av1DDAdaptiveSourceProjectionContext(diagnosticContext, initialState, null, logger)
         var expectedSeq = 10001
         var expectedTs: Long = 1003000
         var expectedFrameNumber = 0
@@ -982,6 +987,7 @@ class Av1DDAdaptiveSourceProjectionTest {
         val context = Av1DDAdaptiveSourceProjectionContext(
             diagnosticContext,
             initialState,
+            null,
             logger
         )
         var targetTid = 0
@@ -1035,6 +1041,7 @@ class Av1DDAdaptiveSourceProjectionTest {
         val context = Av1DDAdaptiveSourceProjectionContext(
             diagnosticContext,
             initialState,
+            null,
             logger
         )
         var expectedSeq = 10001
@@ -1159,6 +1166,7 @@ class Av1DDAdaptiveSourceProjectionTest {
         val context = Av1DDAdaptiveSourceProjectionContext(
             diagnosticContext,
             initialState,
+            null,
             logger
         )
         var expectedSeq = 10001
@@ -1320,6 +1328,31 @@ class Av1DDAdaptiveSourceProjectionTest {
         runSourceSuspensionTest(generator, getIndex(eid = 0, dt = 0)) {
             it.temporalId == 0
         }
+    }
+
+    @Test
+    fun persistentStateProjectionTest() {
+        val diagnosticContext = DiagnosticContext()
+        diagnosticContext["test"] = "singlePacketProjectionTest"
+        val initialState = RtpState(1, 10000, 1000000)
+        val context = Av1DDAdaptiveSourceProjectionContext(
+            diagnosticContext,
+            initialState,
+            Av1PersistentState(5555, 7),
+            logger
+        )
+        val generator = ScalableAv1PacketGenerator(1)
+        val packetInfo = generator.nextPacket()
+        val packet = packetInfo.packetAs<Av1DDPacket>()
+        val targetIndex = getIndex(eid = 0, dt = 0)
+        Assert.assertTrue(context.accept(packetInfo, targetIndex))
+        context.rewriteRtp(packetInfo)
+        Assert.assertEquals(10001, packet.sequenceNumber)
+        Assert.assertEquals(1003000, packet.timestamp)
+        Assert.assertEquals(5556, packet.frameNumber)
+        Assert.assertEquals(0, packet.frameInfo?.spatialId)
+        Assert.assertEquals(0, packet.frameInfo?.temporalId)
+        Assert.assertEquals(7, packet.descriptor?.structure?.templateIdOffset)
     }
 }
 

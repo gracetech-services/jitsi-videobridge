@@ -20,6 +20,7 @@ import org.jitsi.nlj.MediaSourceDesc
 import org.jitsi.nlj.PacketInfo
 import org.jitsi.nlj.SetMediaSourcesEvent
 import org.jitsi.nlj.findRtpSource
+import org.jitsi.nlj.findRtpSourceByPrimary
 import org.jitsi.nlj.format.Vp8PayloadType
 import org.jitsi.nlj.format.Vp9PayloadType
 import org.jitsi.nlj.rtp.ParsedVideoPacket
@@ -228,7 +229,7 @@ class VideoParser(
     }
 
     private fun resetSource(source: MediaSourceDesc) {
-        val signaledSource = signaledSources.findRtpSource(source.primarySSRC)
+        val signaledSource = signaledSources.findRtpSourceByPrimary(source.primarySSRC)
         if (signaledSource == null) {
             logger.warn("Unable to find signaled source corresponding to ${source.primarySSRC}")
             return
@@ -242,6 +243,7 @@ class VideoParser(
     override fun trace(f: () -> Unit) = f.invoke()
 
     override fun getNodeStats(): NodeStatsBlock = super.getNodeStats().apply { stats.addToNodeStatsBlock(this) }
+    override fun statsJson() = super.statsJson().apply { stats.addToJson(this) }
 
     fun getStats() = stats.snapshot()
 
@@ -256,6 +258,11 @@ class VideoParser(
             addNumber("num_packets_dropped_unknown_pt", numPacketsDroppedUnknownPt)
             addNumber("num_keyframes", numKeyframes)
             addNumber("num_layering_changes", numLayeringChanges)
+        }
+        fun addToJson(o: OrderedJsonObject) {
+            o["num_packets_dropped_unknown_pt"] = numPacketsDroppedUnknownPt
+            o["num_keyframes"] = numKeyframes
+            o["num_layering_changes"] = numLayeringChanges
         }
 
         data class Snapshot(

@@ -22,16 +22,15 @@ import org.jitsi.nlj.rtp.VideoRtpPacket
 import org.jitsi.nlj.stats.NodeStatsBlock
 import org.jitsi.nlj.transform.node.ModifierNode
 import org.jitsi.nlj.util.ReadOnlyStreamInformationStore
-import org.jitsi.nlj.util.bytes
 import org.jitsi.rtp.rtp.RtpPacket
 import org.jitsi.rtp.rtp.header_extensions.TccHeaderExtension
 import java.lang.ref.WeakReference
 
 class TccSeqNumTagger(
-    transportCcEngine: TransportCcEngine? = null,
+    transportCcEngine: TransportCcEngine,
     streamInformationStore: ReadOnlyStreamInformationStore
 ) : ModifierNode("TCC sequence number tagger") {
-    private var currTccSeqNum: Int = 1
+    private var currTccSeqNum: Long = 1
     private var tccExtensionId: Int? = null
 
     init {
@@ -49,11 +48,13 @@ class TccSeqNumTagger(
                     val ext = rtpPacket.getHeaderExtension(tccExtId)
                         ?: rtpPacket.addHeaderExtension(tccExtId, TccHeaderExtension.DATA_SIZE_BYTES)
 
-                    TccHeaderExtension.setSequenceNumber(ext, currTccSeqNum)
-
                     val curSeq = currTccSeqNum
-                    val len = rtpPacket.length.bytes
-                    packetInfo.onSent { weakTcc.get()?.mediaPacketSent(curSeq, len) }
+
+                    TccHeaderExtension.setSequenceNumber(ext, curSeq.toInt())
+
+                    weakTcc.get()?.mediaPacketTagged(packetInfo, curSeq)
+
+                    packetInfo.onSent { pkt -> weakTcc.get()?.mediaPacketSent(pkt, curSeq) }
 
                     currTccSeqNum++
                 }
@@ -68,6 +69,11 @@ class TccSeqNumTagger(
         return super.getNodeStats().apply {
             addString("tcc_ext_id", tccExtensionId.toString())
         }
+    }
+
+    override fun stop() {
+        super.stop()
+        weakTcc.get()?.stop()
     }
 
     override fun trace(f: () -> Unit) = f.invoke()

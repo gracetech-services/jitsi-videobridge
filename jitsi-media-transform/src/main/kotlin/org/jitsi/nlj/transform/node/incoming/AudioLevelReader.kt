@@ -36,8 +36,8 @@ class AudioLevelReader(
     /**
      *  Process packets without cryptex pre-SRTP to allow the "skip decryption" optimization if they are to be dropped.
      */
-    val preDecryptNode = AudioLevelReaderNode("Audio level reader (pre-srtp)") { !it.originalHadCryptex }
-    val postDecryptNode = AudioLevelReaderNode("Audio level reader (post-srtp)") { it.originalHadCryptex }
+    val preDecryptNode = AudioLevelReaderNode("AudioLevelReader_pre_srtp") { !it.originalHadCryptex }
+    val postDecryptNode = AudioLevelReaderNode("AudioLevelReader_post_srtp") { it.originalHadCryptex }
 
     private var audioLevelExtId: Int? = null
     var audioLevelListener: AudioLevelListener? = null
@@ -73,7 +73,7 @@ class AudioLevelReader(
                     val silence = level == MUTED_LEVEL
 
                     if (!silence) stats.nonSilence(AudioLevelHeaderExtension.getVad(ext))
-                    if (silence && forwardedSilencePackets > forwardedSilencePacketsLimit) {
+                    if (silence && discardSilence && forwardedSilencePackets > forwardedSilencePacketsLimit) {
                         packetInfo.shouldDiscard = true
                         stats.discardedSilence()
                     } else if (this@AudioLevelReader.forceMute) {
@@ -103,6 +103,13 @@ class AudioLevelReader(
             addBoolean("force_mute", forceMute)
         }
 
+        override fun statsJson() = super.statsJson().apply {
+            this["num_audio_levels"] = stats.numAudioLevels
+            this["num_silence_packets_discarded"] = stats.numDiscardedSilence
+            this["num_force_mute_discarded"] = stats.numDiscardedForceMute
+            this["num_ranking_discarded"] = stats.numDiscardedRanking
+        }
+
         override fun trace(f: () -> Unit) = f.invoke()
     }
 
@@ -110,6 +117,9 @@ class AudioLevelReader(
         const val MUTED_LEVEL = 127
         private val forwardedSilencePacketsLimit: Int by config {
             "jmt.audio.level.forwarded-silence-packets-limit".from(JitsiConfig.newConfig)
+        }
+        private val discardSilence: Boolean by config {
+            "jmt.audio.level.discard-silence".from(JitsiConfig.newConfig)
         }
     }
 }

@@ -16,11 +16,13 @@
 package org.jitsi.videobridge.util
 
 import org.jitsi.nlj.format.AudioRedPayloadType
+import org.jitsi.nlj.format.Av1PayloadType
 import org.jitsi.nlj.format.H264PayloadType
 import org.jitsi.nlj.format.OpusPayloadType
 import org.jitsi.nlj.format.OtherAudioPayloadType
 import org.jitsi.nlj.format.OtherVideoPayloadType
 import org.jitsi.nlj.format.PayloadType
+import org.jitsi.nlj.format.PayloadTypeEncoding.AV1
 import org.jitsi.nlj.format.PayloadTypeEncoding.Companion.createFrom
 import org.jitsi.nlj.format.PayloadTypeEncoding.H264
 import org.jitsi.nlj.format.PayloadTypeEncoding.OPUS
@@ -41,7 +43,6 @@ import org.jitsi.utils.MediaType.VIDEO
 import org.jitsi.utils.logging2.Logger
 import org.jitsi.utils.logging2.LoggerImpl
 import org.jitsi.xmpp.extensions.jingle.PayloadTypePacketExtension
-import org.jitsi.xmpp.util.XmlStringBuilderUtil.Companion.toStringOpt
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -74,7 +75,7 @@ class PayloadTypeUtil {
                 if (parameter.name != null) {
                     parameters[parameter.name] = parameter.value
                 } else {
-                    logger.warn("Ignoring a format parameter with no name: " + parameter.toStringOpt())
+                    logger.warn("Ignoring a format parameter with no name: " + parameter.toXML())
                 }
             }
 
@@ -94,6 +95,7 @@ class PayloadTypeUtil {
             return when (encoding) {
                 VP8 -> Vp8PayloadType(id, parameters, rtcpFeedbackSet)
                 VP9 -> Vp9PayloadType(id, parameters, rtcpFeedbackSet)
+                AV1 -> Av1PayloadType(id, parameters, rtcpFeedbackSet)
                 H264 -> H264PayloadType(id, parameters, rtcpFeedbackSet)
                 RTX -> RtxPayloadType(id, parameters)
                 OPUS -> OpusPayloadType(id, parameters)

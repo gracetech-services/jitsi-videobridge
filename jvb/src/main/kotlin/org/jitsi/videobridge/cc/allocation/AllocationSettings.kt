@@ -80,7 +80,7 @@ internal class AllocationSettingsWrapper(
 
     private var videoConstraints: Map<String, VideoConstraints> = emptyMap()
 
-    private var defaultConstraints: VideoConstraints = VideoConstraints(config.thumbnailMaxHeightPx())
+    private var defaultConstraints: VideoConstraints = VideoConstraints(config.defaultMaxHeightPx)
 
     private var assumedBandwidthBps: Long = -1
 
@@ -138,7 +138,11 @@ internal class AllocationSettingsWrapper(
                 logger.warn("Setting assumed bandwidth ${limited.bps} (receiver asked for $it).")
                 this.assumedBandwidthBps = limited
                 changed = true
-            } ?: logger.info("Ignoring assumed-bandwidth-bps, not allowed in config.")
+            } ?: run {
+                if (it.bps >= 0.bps) {
+                    logger.info("Ignoring assumed-bandwidth-bps, not allowed in config.")
+                }
+            }
         }
 
         if (changed) {

@@ -25,7 +25,7 @@ import org.jitsi.nlj.codec.vpx.VpxUtils.Companion.applyExtendedPictureIdDelta
 import org.jitsi.nlj.codec.vpx.VpxUtils.Companion.applyTl0PicIdxDelta
 import org.jitsi.nlj.codec.vpx.VpxUtils.Companion.getExtendedPictureIdDelta
 import org.jitsi.nlj.rtp.codec.vp9.Vp9Packet
-import org.jitsi.nlj.util.Rfc3711IndexTracker
+import org.jitsi.nlj.util.RtpSequenceIndexTracker
 import org.jitsi.rtp.rtcp.RtcpSrPacket
 import org.jitsi.rtp.rtcp.RtcpSrPacketBuilder
 import org.jitsi.rtp.rtp.RtpPacket
@@ -165,7 +165,7 @@ class Vp9AdaptiveSourceProjectionTest {
     private class ProjectedPacket constructor(
         val packet: Vp9Packet,
         val origSeq: Int,
-        val extOrigSeq: Int,
+        val extOrigSeq: Long,
         val nearOldest: Boolean
     )
 
@@ -196,9 +196,9 @@ class Vp9AdaptiveSourceProjectionTest {
             logger
         )
         var latestSeq = buffer[0]!!.packetAs<Vp9Packet>().sequenceNumber
-        val projectedPackets = TreeMap<Int, ProjectedPacket?>()
-        val origSeqIdxTracker = Rfc3711IndexTracker()
-        val newSeqIdxTracker = Rfc3711IndexTracker()
+        val projectedPackets = TreeMap<Long, ProjectedPacket?>()
+        val origSeqIdxTracker = RtpSequenceIndexTracker()
+        val newSeqIdxTracker = RtpSequenceIndexTracker()
         for (i in 0..99999) {
             val packetInfo = buffer[0]
             val packet = packetInfo!!.packetAs<Vp9Packet>()
@@ -259,7 +259,7 @@ class Vp9AdaptiveSourceProjectionTest {
                 buffer.shuffle(random)
             }
         }
-        val iter: Iterator<Int> = projectedPackets.keys.iterator()
+        val iter: Iterator<Long> = projectedPackets.keys.iterator()
         var prevPacket = projectedPackets[iter.next()]
         while (iter.hasNext()) {
             val packet = projectedPackets[iter.next()]

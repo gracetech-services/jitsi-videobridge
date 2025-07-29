@@ -18,6 +18,7 @@ package org.jitsi.nlj
 import org.jitsi.nlj.rtp.SsrcAssociationType
 import org.jitsi.nlj.rtp.VideoRtpPacket
 import org.jitsi.nlj.stats.NodeStatsBlock
+import org.jitsi.utils.OrderedJsonObject
 
 /**
  * Keeps track of information specific to an RTP encoded stream
@@ -154,12 +155,12 @@ constructor(
     }
 
     /**
-     * Gets a boolean indicating whether or not the SSRC specified in the
-     * arguments matches this encoding or not.
+     * Gets a boolean indicating whether the SSRC specified in the
+     * arguments is used by this encoding.
      *
      * @param ssrc the SSRC to match.
      */
-    fun matches(ssrc: Long): Boolean {
+    fun hasSsrc(ssrc: Long): Boolean {
         return if (primarySSRC == ssrc) {
             true
         } else {
@@ -170,13 +171,13 @@ constructor(
     /**
      * Extracts a [NodeStatsBlock] from an [RtpEncodingDesc].
      */
-    fun getNodeStats() = NodeStatsBlock(primarySSRC.toString()).apply {
-        addNumber("rtx_ssrc", getSecondarySsrc(SsrcAssociationType.RTX))
-        addNumber("fec_ssrc", getSecondarySsrc(SsrcAssociationType.FEC))
-        addNumber("eid", eid)
-        addNumber("nominal_height", nominalHeight)
+    fun debugState() = OrderedJsonObject().apply {
+        this["rtx_ssrc"] = getSecondarySsrc(SsrcAssociationType.RTX)
+        this["fec_ssrc"] = getSecondarySsrc(SsrcAssociationType.FEC)
+        this["eid"] = eid
+        this["nominal_height"] = nominalHeight
         for (layer in layers) {
-            addBlock(layer.getNodeStats())
+            this[layer.indexString()] = layer.debugState()
         }
     }
 

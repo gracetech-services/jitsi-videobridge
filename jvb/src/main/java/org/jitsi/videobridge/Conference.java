@@ -29,6 +29,7 @@ import org.jitsi.utils.logging2.LoggerImpl;
 import org.jitsi.utils.logging2.*;
 import org.jitsi.utils.queue.*;
 import org.jitsi.videobridge.colibri2.*;
+import org.jitsi.videobridge.export.*;
 import org.jitsi.videobridge.message.*;
 import org.jitsi.videobridge.metrics.*;
 import org.jitsi.videobridge.relay.*;
@@ -40,7 +41,6 @@ import org.jivesoftware.smack.packet.*;
 import org.json.simple.*;
 import org.jxmpp.jid.*;
 
-import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -72,6 +72,11 @@ public class Conference
      * A boolean that indicates whether or not to include RTCStats for this call.
      */
     private final boolean isRtcStatsEnabled;
+
+    public boolean isRtcStatsEnabled()
+    {
+        return isRtcStatsEnabled;
+    }
 
     /**
      * A read-only cache of the endpoints in this conference. Note that it
@@ -175,10 +180,13 @@ public class Conference
 
     /**
      * A unique meeting ID optionally set by the signaling server ({@code null} if not explicitly set). It is exposed
-     * via ({@link #getDebugState()} for outside use.
+     * via ({@link #getDebugState(DebugStateMode, String)} ()} for outside use.
      */
     @Nullable
     private final String meetingId;
+
+    @NotNull
+    private final ExporterWrapper exporter;
 
     /**
      * A regex pattern to trim UUIDs to just their first 8 hex characters.
@@ -216,6 +224,7 @@ public class Conference
         }
 
         logger = new LoggerImpl(Conference.class.getName(), new LogContext(context));
+        exporter = new ExporterWrapper(logger);
         this.id = Objects.requireNonNull(id, "id");
         this.conferenceName = conferenceName;
         this.colibri2Handler = new Colibri2ConferenceHandler(this, logger);
@@ -225,7 +234,7 @@ public class Conference
                     try
                     {
                         logger.info( () -> {
-                            String reqStr = XmlStringBuilderUtil.toStringOpt(request.getRequest());
+                            String reqStr = request.getRequest().toXML().toString();
                             if (VideobridgeConfig.getRedactRemoteAddresses())
                             {
                                 reqStr = RedactColibriIp.Companion.redact(reqStr);
@@ -243,7 +252,7 @@ public class Conference
                         request.getTotalDelayStats().addDelay(totalDelay);
                         if (processingDelay > 100)
                         {
-                            String reqStr = XmlStringBuilderUtil.toStringOpt(request.getRequest());
+                            String reqStr = request.getRequest().toXML().toString();
                             if (VideobridgeConfig.getRedactRemoteAddresses())
                             {
                                 reqStr = RedactColibriIp.Companion.redact(reqStr);
@@ -251,7 +260,7 @@ public class Conference
                             logger.warn("Took " + processingDelay + " ms to process an IQ (total delay "
                                     + totalDelay + " ms): " + reqStr);
                         }
-                        logger.info("SENT colibri2 response: " + XmlStringBuilderUtil.toStringOpt(response));
+                        logger.info("SENT colibri2 response: " + response.toXML());
                         request.getCallback().invoke(response);
                         if (expire) videobridge.expireConference(this);
                     }
@@ -599,6 +608,7 @@ public class Conference
         logger.debug(() -> "Expiring endpoints.");
         getEndpoints().forEach(AbstractEndpoint::expire);
         getRelays().forEach(Relay::expire);
+        exporter.stop();
         speechActivity.expire();
 
         updateStatisticsOnExpire();
@@ -940,7 +950,11 @@ public class Conference
         }
 
         relaysById.forEach((i, relay) -> relay.endpointExpired(id));
-        endpoint.getSsrcs().forEach(ssrc -> endpointsBySsrc.remove(ssrc, endpoint));
+        endpoint.getSsrcs().forEach(ssrc -> {
+            endpointsBySsrc.remove(ssrc, endpoint);
+        });
+        var audioSet = new HashSet<>(endpoint.getAudioSources());
+        getLocalEndpoints().forEach(e -> e.conferenceAudioSourceRemoved(audioSet));
         endpointsChanged(removedEndpoint.getVisitor());
     }
 
@@ -1022,6 +1036,19 @@ public class Conference
         {
             logger.warn("SSRC " + ssrc + " moved from ep " + oldEndpoint.getId() + " to ep " + endpoint.getId());
         }
+    }
+
+    /**
+     * Gets local audio SSRCs in the conference
+     * @return the list of audio SSRCs in the conference
+     */
+    public List<AudioSourceDesc> getAudioSourceDescs()
+    {
+        List<AudioSourceDesc> descs = new ArrayList<>();
+        for (Endpoint endpoint : getLocalEndpoints()) {
+            descs.addAll(endpoint.getAudioSources());
+        }
+        return descs;
     }
 
     /**
@@ -1118,6 +1145,14 @@ public class Conference
                 prevHandler = relay;
             }
         }
+        if (exporter.wants(packetInfo))
+        {
+            if (prevHandler != null)
+            {
+                prevHandler.send(packetInfo.clone());
+            }
+            prevHandler = exporter;
+        }
 
         if (prevHandler != null)
         {
@@ -1128,6 +1163,11 @@ public class Conference
             // No one wanted the packet, so the buffer is now free!
             ByteBufferPool.returnBuffer(packetInfo.getPacket().getBuffer());
         }
+    }
+
+    public void setConnects(List<Connect> exports)
+    {
+        exporter.setConnects(exports);
     }
 
     public boolean hasRelays()
@@ -1233,40 +1273,23 @@ public class Conference
     /**
      * Gets a JSON representation of the parts of this object's state that
      * are deemed useful for debugging.
-     */
-    public JSONObject getDebugState()
-    {
-        return getDebugState(true);
-    }
-
-    /**
-     * Gets a JSON representation of the parts of this object's state that
-     * are deemed useful for debugging.
      *
-     * @param full if specified the result will include more details and will
-     * include the debug state of the endpoint(s). Otherwise just the IDs and
-     * names of the conference and endpoints are included.
-     */
-    public JSONObject getDebugState(boolean full)
-    {
-        return getDebugState(full, null);
-    }
-
-    /**
-     * Gets a JSON representation of the parts of this object's state that
-     * are deemed useful for debugging.
-     *
-     * @param full if specified the result will include more details and will
-     * include the debug state of the endpoint(s). Otherwise just the IDs and
-     * names of the conference and endpoints are included.
-     * @param endpointId the ID of the endpoint to include. If set to
-     * {@code null}, all endpoints will be included.
+     * @param mode determines how much detail to include in the debug state.
+     * @param endpointId the ID of the endpoint to include. If set to {@code null}, all endpoints will be included.
      */
     @SuppressWarnings("unchecked")
-    public JSONObject getDebugState(boolean full, String endpointId)
+    public JSONObject getDebugState(@NotNull DebugStateMode mode, @Nullable String endpointId)
     {
+        if (mode == DebugStateMode.STATS && !isRtcStatsEnabled)
+        {
+            return new JSONObject();
+        }
+
+        boolean full = mode == DebugStateMode.FULL || mode == DebugStateMode.STATS;
         JSONObject debugState = new JSONObject();
         debugState.put("id", id);
+
+        // Keep this camelCase for compatibility with jvb-rtcstats-push
         debugState.put("rtcstatsEnabled", isRtcStatsEnabled);
 
         if (conferenceName != null)
@@ -1281,9 +1304,11 @@ public class Conference
         if (full)
         {
             debugState.put("expired", expired.get());
-            debugState.put("creationTime", creationTime);
-            debugState.put("speechActivity", speechActivity.getDebugState());
-            //debugState.put("encodingsManager", encodingsManager.getDebugState());
+            debugState.put("creation_time", creationTime);
+        }
+        if (mode == DebugStateMode.FULL || mode == DebugStateMode.STATS)
+        {
+            debugState.put("speech_activity", speechActivity.getDebugState(mode));
         }
 
         JSONObject endpoints = new JSONObject();
@@ -1292,7 +1317,14 @@ public class Conference
         {
             if (endpointId == null || endpointId.equals(e.getId()))
             {
-                endpoints.put(e.getId(), full ? e.getDebugState() : e.getStatsId());
+                if (mode == DebugStateMode.SHORT)
+                {
+                    endpoints.put(e.getId(), e.getStatsId());
+                }
+                else
+                {
+                    endpoints.put(e.getId(), e.debugState(mode));
+                }
             }
         }
 
@@ -1300,7 +1332,14 @@ public class Conference
         debugState.put("relays", relays);
         for (Relay r : relaysById.values())
         {
-            relays.put(r.getId(), full ? r.getDebugState() : r.getId());
+            if (mode == DebugStateMode.SHORT)
+            {
+                relays.put(r.getId(), r.getId());
+            }
+            else
+            {
+                relays.put(r.getId(), r.debugState(mode));
+            }
         }
 
         return debugState;

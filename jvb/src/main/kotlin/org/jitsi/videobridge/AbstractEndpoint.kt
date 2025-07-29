@@ -15,17 +15,19 @@
  */
 package org.jitsi.videobridge
 
+import org.jitsi.nlj.DebugStateMode
 import org.jitsi.nlj.MediaSourceDesc
 import org.jitsi.nlj.VideoType
 import org.jitsi.nlj.format.PayloadType
 import org.jitsi.nlj.rtp.RtpExtension
-import org.jitsi.nlj.util.NEVER
+import org.jitsi.utils.NEVER
 import org.jitsi.utils.event.EventEmitter
 import org.jitsi.utils.event.SyncEventEmitter
 import org.jitsi.utils.logging2.Logger
 import org.jitsi.videobridge.cc.allocation.MediaSourceContainer
 import org.jitsi.videobridge.cc.allocation.ReceiverConstraintsMap
 import org.jitsi.videobridge.cc.allocation.VideoConstraints
+import org.jitsi.videobridge.relay.AudioSourceDesc
 import org.json.simple.JSONObject
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -106,6 +108,12 @@ abstract class AbstractEndpoint protected constructor(
         val mediaSourceDesc = findMediaSourceDesc(sourceName)
         if (mediaSourceDesc != null) {
             if (mediaSourceDesc.videoType !== videoType) {
+                if (mediaSourceDesc.videoType.isEnabled() && videoType.isEnabled()) {
+                    logger.warn(
+                        "Changing video type from ${mediaSourceDesc.videoType} to $videoType for $sourceName. " +
+                            "This will not trigger re-signaling the mapping."
+                    )
+                }
                 mediaSourceDesc.videoType = videoType
                 conference.speechActivity.endpointVideoAvailabilityChanged()
             }
@@ -173,7 +181,7 @@ abstract class AbstractEndpoint protected constructor(
      * Expires this [AbstractEndpoint].
      */
     open fun expire() {
-        logger.info("Expiring.")
+        logger.debug("Expiring.")
         isExpired = true
         conference.endpointExpired(this)
     }
@@ -210,19 +218,16 @@ abstract class AbstractEndpoint protected constructor(
     abstract fun requestKeyframe()
 
     /** A JSON representation of the parts of this object's state that are deemed useful for debugging. */
-    open val debugState: JSONObject
-        get() {
-            val debugState = JSONObject()
-            val receiverVideoConstraints = JSONObject()
-            this.receiverVideoConstraints.forEach { (sourceName, receiverConstraints) ->
-                receiverVideoConstraints[sourceName] = receiverConstraints.getDebugState()
-            }
-            debugState["receiverVideoConstraints"] = receiverVideoConstraints
-            debugState["maxReceiverVideoConstraints"] = HashMap(maxReceiverVideoConstraints)
-            debugState["expired"] = isExpired
-            debugState["statsId"] = statsId
-            return debugState
+    open fun debugState(mode: DebugStateMode): JSONObject = JSONObject().apply {
+        val receiverVideoConstraints = JSONObject()
+        this@AbstractEndpoint.receiverVideoConstraints.forEach { (sourceName, receiverConstraints) ->
+            receiverVideoConstraints[sourceName] = receiverConstraints.getDebugState()
         }
+        this["receiver_video_constraints"] = receiverVideoConstraints
+        this["max_receiver_video_constraints"] = HashMap(maxReceiverVideoConstraints)
+        this["expired"] = isExpired
+        this["stats_id"] = statsId
+    }
 
     /**
      * Computes and sets the [.maxReceiverVideoConstraints] from the specified video constraints of the media
@@ -250,6 +255,11 @@ abstract class AbstractEndpoint protected constructor(
      * Whether the remote endpoint is currently sending video.
      */
     abstract val isSendingVideo: Boolean
+
+    /**
+     * The set of [AudioSourceDesc]s that this endpoint has advertised.
+     */
+    abstract var audioSources: List<AudioSourceDesc>
 
     /**
      * Adds a payload type to this endpoint.

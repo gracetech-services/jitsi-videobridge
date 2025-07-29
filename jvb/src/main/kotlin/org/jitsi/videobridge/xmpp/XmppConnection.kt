@@ -20,17 +20,18 @@ import org.jitsi.nlj.stats.DelayStats
 import org.jitsi.utils.OrderedJsonObject
 import org.jitsi.utils.logging2.cdebug
 import org.jitsi.utils.logging2.createLogger
+import org.jitsi.videobridge.metrics.VideobridgeMetrics
 import org.jitsi.videobridge.metrics.VideobridgeMetricsContainer
 import org.jitsi.videobridge.xmpp.config.XmppClientConnectionConfig.Companion.config
 import org.jitsi.xmpp.extensions.colibri.ForcefulShutdownIQ
 import org.jitsi.xmpp.extensions.colibri.GracefulShutdownIQ
 import org.jitsi.xmpp.extensions.colibri2.ConferenceModifyIQ
 import org.jitsi.xmpp.extensions.health.HealthCheckIQ
+import org.jitsi.xmpp.mucclient.ConnectionStateListener
 import org.jitsi.xmpp.mucclient.IQListener
 import org.jitsi.xmpp.mucclient.MucClient
 import org.jitsi.xmpp.mucclient.MucClientConfiguration
 import org.jitsi.xmpp.mucclient.MucClientManager
-import org.jitsi.xmpp.util.XmlStringBuilderUtil.Companion.toStringOpt
 import org.jitsi.xmpp.util.createError
 import org.jivesoftware.smack.packet.ExtensionElement
 import org.jivesoftware.smack.packet.IQ
@@ -64,6 +65,14 @@ class XmppConnection : IQListener {
                 registerIQ(GracefulShutdownIQ())
                 registerIQ(ConferenceModifyIQ.ELEMENT, ConferenceModifyIQ.NAMESPACE, false)
                 setIQListener(this@XmppConnection)
+                addConnectionStateListener(object : ConnectionStateListener {
+                    override fun connected(mucClient: MucClient) {}
+                    override fun closed(mucClient: MucClient) = VideobridgeMetrics.xmppDisconnects.inc()
+                    override fun closedOnError(mucClient: MucClient) = VideobridgeMetrics.xmppDisconnects.inc()
+                    override fun reconnecting(mucClient: MucClient) {}
+                    override fun reconnectionFailed(mucClient: MucClient) {}
+                    override fun pingFailed(mucClient: MucClient) {}
+                })
             }
 
             config.clientConfigs.forEach { cfg -> mucClientManager.addMucClient(cfg) }
@@ -198,12 +207,12 @@ class XmppConnection : IQListener {
         }
         // colibri2 requests are logged at the conference level.
         if (iq !is ConferenceModifyIQ) {
-            logger.cdebug { "RECV: ${iq.toStringOpt()}" }
+            logger.cdebug { "RECV: ${iq.toXML()}" }
         }
 
         return when (iq.type) {
             IQ.Type.get, IQ.Type.set -> handleIqRequest(iq, mucClient)?.also {
-                logger.cdebug { "SENT: ${it.toStringOpt()}" }
+                logger.cdebug { "SENT: ${it.toXML()}" }
             }
             else -> null
         }
@@ -216,7 +225,7 @@ class XmppConnection : IQListener {
             "Service unavailable"
         )
         val response = when (iq) {
-            is Version -> measureDelay(versionDelayStats, { iq.toStringOpt() }) {
+            is Version -> measureDelay(versionDelayStats, { iq.toXML() }) {
                 handler.versionIqReceived(iq)
             }
             is ConferenceModifyIQ -> {
@@ -229,7 +238,7 @@ class XmppConnection : IQListener {
                 )
                 null
             }
-            is HealthCheckIQ -> measureDelay(healthDelayStats, { iq.toStringOpt() }) {
+            is HealthCheckIQ -> measureDelay(healthDelayStats, { iq.toXML() }) {
                 handler.healthCheckIqReceived(iq)
             }
             else -> createError(

@@ -16,21 +16,22 @@
 
 package org.jitsi.nlj.transform.node.outgoing
 
+import org.jitsi.nlj.DebugStateMode
 import org.jitsi.nlj.Event
 import org.jitsi.nlj.EventHandler
 import org.jitsi.nlj.PacketHandler
 import org.jitsi.nlj.PacketInfo
+import org.jitsi.nlj.PacketOrigin
 import org.jitsi.nlj.SetLocalSsrcEvent
 import org.jitsi.nlj.format.RtxPayloadType
 import org.jitsi.nlj.format.VideoPayloadType
 import org.jitsi.nlj.rtp.PaddingVideoPacket
-import org.jitsi.nlj.stats.NodeStatsBlock
-import org.jitsi.nlj.transform.NodeStatsProducer
 import org.jitsi.nlj.util.PacketCache
 import org.jitsi.nlj.util.ReadOnlyStreamInformationStore
 import org.jitsi.rtp.extensions.unsigned.toPositiveInt
 import org.jitsi.rtp.rtp.RtpHeader
 import org.jitsi.utils.MediaType
+import org.jitsi.utils.OrderedJsonObject
 import org.jitsi.utils.logging.DiagnosticContext
 import org.jitsi.utils.logging.TimeSeriesLogger
 import org.jitsi.utils.logging2.Logger
@@ -53,7 +54,7 @@ class ProbingDataSender(
     private val diagnosticContext: DiagnosticContext,
     streamInformationStore: ReadOnlyStreamInformationStore,
     parentLogger: Logger
-) : EventHandler, NodeStatsProducer {
+) : EventHandler {
 
     private val timeSeriesLogger = TimeSeriesLogger.getTimeSeriesLogger(this.javaClass)
     private val logger = createChildLogger(parentLogger)
@@ -65,6 +66,8 @@ class ProbingDataSender(
     // Stats
     private var numProbingBytesSentRtx: Long = 0
     private var numProbingBytesSentDummyData: Long = 0
+
+    private var lastMediaSsrcs: Collection<Long> = emptyList()
 
     init {
         streamInformationStore.onRtpPayloadTypesChanged { currentRtpPayloadTypes ->
@@ -85,15 +88,22 @@ class ProbingDataSender(
         }
     }
 
-    fun sendProbing(mediaSsrcs: Collection<Long>, numBytes: Int): Int {
+    fun sendProbing(mediaSsrcsIn: Collection<Long>?, numBytes: Int, probingInfo: Any?): Int {
         var totalBytesSent = 0
+
+        val mediaSsrcs = if (mediaSsrcsIn != null) {
+            lastMediaSsrcs = mediaSsrcsIn
+            mediaSsrcsIn
+        } else {
+            lastMediaSsrcs
+        }
 
         if (rtxSupported) {
             for (mediaSsrc in mediaSsrcs) {
                 if (totalBytesSent >= numBytes) {
                     break
                 }
-                val rtxBytesSent = sendRedundantDataOverRtx(mediaSsrc, numBytes - totalBytesSent)
+                val rtxBytesSent = sendRedundantDataOverRtx(mediaSsrc, numBytes - totalBytesSent, probingInfo)
                 numProbingBytesSentRtx += rtxBytesSent
                 totalBytesSent += rtxBytesSent
                 if (timeSeriesLogger.isTraceEnabled()) {
@@ -107,7 +117,7 @@ class ProbingDataSender(
             }
         }
         if (totalBytesSent < numBytes) {
-            val dummyBytesSent = sendDummyData(numBytes - totalBytesSent)
+            val dummyBytesSent = sendDummyData(numBytes - totalBytesSent, probingInfo)
             numProbingBytesSentDummyData += dummyBytesSent
             totalBytesSent += dummyBytesSent
             if (timeSeriesLogger.isTraceEnabled()) {
@@ -127,7 +137,7 @@ class ProbingDataSender(
      * by re-transmitting previously sent packets from the outgoing packet cache.
      * Returns the number of bytes transmitted
      */
-    private fun sendRedundantDataOverRtx(mediaSsrc: Long, numBytes: Int): Int {
+    private fun sendRedundantDataOverRtx(mediaSsrc: Long, numBytes: Int, probingInfo: Any?): Int {
         var bytesSent = 0
         // TODO(brian): we're in a thread context mess here.  we'll be sending these out from the bandwidthprobing
         // context (or whoever calls this) which i don't think we want.  Need look at getting all the pipeline
@@ -136,7 +146,10 @@ class ProbingDataSender(
         // Get the most recent packets whose length add up to no more than numBytes.
         packetCache.getMany(mediaSsrc, numBytes).forEach {
             bytesSent += it.length
-            rtxDataSender.processPacket(PacketInfo(it))
+            val packetInfo = PacketInfo(it)
+            packetInfo.probingInfo = probingInfo
+            packetInfo.packetOrigin = if (probingInfo != null) PacketOrigin.Probing else PacketOrigin.Padding
+            rtxDataSender.processPacket(packetInfo)
         }
         return bytesSent
     }
@@ -144,7 +157,7 @@ class ProbingDataSender(
     private var currDummyTimestamp = random.nextLong() and 0xFFFFFFFF
     private var currDummySeqNum = random.nextInt(0xFFFF)
 
-    private fun sendDummyData(numBytes: Int): Int {
+    private fun sendDummyData(numBytes: Int, probingInfo: Any?): Int {
         var bytesSent = 0
         val pt = videoPayloadTypes.firstOrNull() ?: return bytesSent
         val senderSsrc = localVideoSsrc ?: return bytesSent
@@ -162,7 +175,10 @@ class ProbingDataSender(
             paddingPacket.ssrc = senderSsrc
             paddingPacket.timestamp = currDummyTimestamp
             paddingPacket.sequenceNumber = currDummySeqNum
-            garbageDataSender.processPacket(PacketInfo(paddingPacket))
+            val packetInfo = PacketInfo(paddingPacket)
+            packetInfo.probingInfo = probingInfo
+            packetInfo.packetOrigin = if (probingInfo != null) PacketOrigin.Probing else PacketOrigin.Padding
+            garbageDataSender.processPacket(packetInfo)
 
             currDummySeqNum++
             bytesSent += packetLength
@@ -183,15 +199,15 @@ class ProbingDataSender(
         }
     }
 
-    override fun getNodeStats(): NodeStatsBlock {
-        return NodeStatsBlock("Probing data sender").apply {
-            addNumber("num_bytes_of_probing_data_sent_as_rtx", numProbingBytesSentRtx)
-            addNumber("num_bytes_of_probing_data_sent_as_dummy", numProbingBytesSentDummyData)
-            addBoolean("rtx_supported", rtxSupported)
-            addString("local_video_ssrc", localVideoSsrc.toString())
-            addString("curr_dummy_timestamp", currDummyTimestamp.toString())
-            addString("curr_dummy_seq_num", currDummySeqNum.toString())
-            addString("video_payload_types", videoPayloadTypes.toString())
+    fun debugState(mode: DebugStateMode) = OrderedJsonObject().apply {
+        this["num_bytes_of_probing_data_sent_as_rtx"] = numProbingBytesSentRtx
+        this["num_bytes_of_probing_data_sent_as_dummy"] = numProbingBytesSentDummyData
+        this["rtx_supported"] = rtxSupported
+        if (mode == DebugStateMode.FULL) {
+            this["local_video_ssrc"] = localVideoSsrc.toString()
+            this["curr_dummy_timestamp"] = currDummyTimestamp.toString()
+            this["curr_dummy_seq_num"] = currDummySeqNum.toString()
+            this["video_payload_types"] = videoPayloadTypes.toString()
         }
     }
 

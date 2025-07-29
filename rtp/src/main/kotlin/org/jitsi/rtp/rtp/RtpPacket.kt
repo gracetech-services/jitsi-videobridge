@@ -407,18 +407,23 @@ open class RtpPacket(
             cloneBuffer(BYTES_TO_LEAVE_AT_START_OF_PACKET),
             BYTES_TO_LEAVE_AT_START_OF_PACKET,
             length
-        ).also { if (pendingHeaderExtensions != null) it.pendingHeaderExtensions = ArrayList(pendingHeaderExtensions) }
+        ).also { postClone(it) }
     }
 
-    override fun toString(): String = with(StringBuilder()) {
-        append("RtpPacket: ")
+    /** Extra operations that need to be done after [clone].  All subclasses overriding [clone]
+     * must call this method on the newly-created clone. */
+    protected fun postClone(clone: RtpPacket) {
+        pendingHeaderExtensions?.let { clone.pendingHeaderExtensions = ArrayList(it) }
+    }
+
+    override fun toString(): String = buildString {
+        append("${this@RtpPacket::class.java.simpleName}: ")
         append("PT=$payloadType")
         append(", Ssrc=$ssrc")
         append(", SeqNum=$sequenceNumber")
         append(", M=$isMarked")
         append(", X=$hasEncodedExtensions")
         append(", Ts=$timestamp")
-        toString()
     }
 
     /**

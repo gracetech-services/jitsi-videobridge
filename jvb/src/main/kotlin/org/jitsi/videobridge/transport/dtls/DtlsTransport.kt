@@ -129,7 +129,7 @@ class DtlsTransport(parentLogger: Logger, id: String) {
      * (via [setSetupAttribute]
      */
     fun startDtlsHandshake() {
-        logger.info("Starting DTLS handshake, role=${dtlsStack.role}")
+        logger.info("Starting DTLS handshake, role=${dtlsStack.role?.javaClass?.simpleName}")
         if (dtlsStack.role == null) {
             logger.warn("Starting the DTLS stack before it knows its role")
         }
@@ -163,7 +163,7 @@ class DtlsTransport(parentLogger: Logger, id: String) {
         }
     }
 
-    fun setRemoteFingerprints(remoteFingerprints: Map<String, String>) {
+    fun setRemoteFingerprints(remoteFingerprints: Map<String, List<String>>) {
         // Don't pass an empty list to the stack in order to avoid wiping
         // certificates that were contained in a previous request.
         if (remoteFingerprints.isEmpty()) {
@@ -216,7 +216,7 @@ class DtlsTransport(parentLogger: Logger, id: String) {
 
     fun getDebugState(): OrderedJsonObject = stats.toJson().apply {
         put("running", running.get())
-        put("role", dtlsStack.role.toString())
+        put("role", dtlsStack.role?.javaClass?.simpleName ?: "null")
         put("is_connected", isConnected)
     }
 

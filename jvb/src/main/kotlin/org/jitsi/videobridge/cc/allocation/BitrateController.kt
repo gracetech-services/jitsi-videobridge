@@ -15,17 +15,19 @@
  */
 package org.jitsi.videobridge.cc.allocation
 
+import org.jitsi.nlj.DebugStateMode
 import org.jitsi.nlj.MediaSourceDesc
 import org.jitsi.nlj.PacketInfo
 import org.jitsi.nlj.format.PayloadType
 import org.jitsi.nlj.format.PayloadTypeEncoding
+import org.jitsi.nlj.util.Bandwidth
 import org.jitsi.nlj.util.bps
 import org.jitsi.rtp.rtcp.RtcpSrPacket
 import org.jitsi.utils.event.SyncEventEmitter
 import org.jitsi.utils.logging.DiagnosticContext
 import org.jitsi.utils.logging.TimeSeriesLogger
 import org.jitsi.utils.logging2.Logger
-import org.jitsi.utils.secs
+import org.jitsi.utils.logging2.createChildLogger
 import org.jitsi.videobridge.cc.config.BitrateControllerConfig.Companion.config
 import org.jitsi.videobridge.message.ReceiverVideoConstraintsMessage
 import org.jitsi.videobridge.util.BooleanStateTimeTracker
@@ -51,6 +53,8 @@ class BitrateController<T : MediaSourceContainer> @JvmOverloads constructor(
     private val clock: Clock = Clock.systemUTC()
 ) {
     val eventEmitter = SyncEventEmitter<EventHandler>()
+
+    private val logger = createChildLogger(parentLogger)
 
     private val bitrateAllocatorEventHandler = BitrateAllocatorEventHandler()
 
@@ -99,13 +103,15 @@ class BitrateController<T : MediaSourceContainer> @JvmOverloads constructor(
         eventEmitter.addHandler(eventHandler)
     }
 
+    private var bweSet = false
+
     /**
-     * Ignore the bandwidth estimations in the first 10 seconds because the REMBs don't ramp up fast enough. This needs
-     * to go but it's related to our GCC implementation that needs to be brought up to speed.
-     * TODO: Is this comment still accurate?
+     * Ignore the bandwidth estimations for some initial time because the REMBs don't ramp up fast enough.
+     * This shouldn't be needed for other bandwidth estimation algorithms.
      */
     private val trustBwe: Boolean
-        get() = config.trustBwe() && supportsRtx && packetHandler.timeSinceFirstMedia() >= 10.secs
+        get() = config.trustBwe && supportsRtx && bweSet &&
+            packetHandler.timeSinceFirstMedia() >= config.initialIgnoreBwePeriod
 
     // Proxy to the allocator
     fun endpointOrderingChanged() = bandwidthAllocator.update()
@@ -124,6 +130,7 @@ class BitrateController<T : MediaSourceContainer> @JvmOverloads constructor(
     fun getTotalOversendingTime(): Duration = oversendingTimeTracker.totalTimeOn()
     fun isOversending() = oversendingTimeTracker.state
     fun bandwidthChanged(newBandwidthBps: Long) {
+        bweSet = true
         timeSeriesLogger?.logBweChange(newBandwidthBps)
         bandwidthAllocator.bandwidthChanged(newBandwidthBps)
     }
@@ -132,6 +139,9 @@ class BitrateController<T : MediaSourceContainer> @JvmOverloads constructor(
     fun accept(packetInfo: PacketInfo): Boolean {
         if (packetInfo.layeringChanged) {
             // This needs to be done synchronously, so it's complete before the accept, below.
+            logger.debug {
+                "Layering information changed for packet from ${packetInfo.endpointId}, updating bandwidth allocation"
+            }
             bandwidthAllocator.update()
         }
         return packetHandler.accept(packetInfo)
@@ -140,16 +150,15 @@ class BitrateController<T : MediaSourceContainer> @JvmOverloads constructor(
     fun transformRtcp(rtcpSrPacket: RtcpSrPacket): Boolean = packetHandler.transformRtcp(rtcpSrPacket)
     fun transformRtp(packetInfo: PacketInfo): Boolean = packetHandler.transformRtp(packetInfo)
 
-    val debugState: JSONObject
-        get() = JSONObject().apply {
-            put("bitrate_allocator", bandwidthAllocator.debugState)
-            put("packet_handler", packetHandler.debugState)
-            put("forwardedSources", forwardedSources.toString())
-            put("oversending", oversendingTimeTracker.state)
-            put("total_oversending_time_secs", oversendingTimeTracker.totalTimeOn().seconds)
-            put("supportsRtx", supportsRtx)
-            put("trust_bwe", trustBwe)
-        }
+    fun debugState(mode: DebugStateMode): JSONObject = JSONObject().apply {
+        put("bitrate_allocator", bandwidthAllocator.debugState)
+        put("packet_handler", packetHandler.debugState(mode))
+        put("forwarded_sources", forwardedSources.toString())
+        put("oversending", oversendingTimeTracker.state)
+        put("total_oversending_time_secs", oversendingTimeTracker.totalTimeOn().seconds)
+        put("supports_rtx", supportsRtx)
+        put("trust_bwe", trustBwe)
+    }
 
     fun addPayloadType(payloadType: PayloadType) {
         if (payloadType.encoding == PayloadTypeEncoding.RTX) {
@@ -189,16 +198,30 @@ class BitrateController<T : MediaSourceContainer> @JvmOverloads constructor(
         var totalTargetBitrate = 0.bps
         var totalIdealBitrate = 0.bps
         val activeSsrcs = mutableSetOf<Long>()
+        var hasNonIdealLayer = false
 
         val nowMs = clock.instant().toEpochMilli()
         val allocation = bandwidthAllocator.allocation
-        allocation.allocations.forEach {
-            it.targetLayer?.getBitrate(nowMs)?.let { targetBitrate ->
-                totalTargetBitrate += targetBitrate
-                it.mediaSource?.primarySSRC?.let { primarySsrc -> activeSsrcs.add(primarySsrc) }
+        allocation.allocations.forEach { singleAllocation ->
+            val allocationTargetBitrate: Bandwidth? = singleAllocation.targetLayer?.getBitrate(nowMs)
+
+            allocationTargetBitrate?.let {
+                totalTargetBitrate += it
+                singleAllocation.mediaSource?.primarySSRC?.let { primarySsrc -> activeSsrcs.add(primarySsrc) }
             }
-            it.idealLayer?.getBitrate(nowMs)?.let { idealBitrate ->
-                totalIdealBitrate += idealBitrate
+
+            val allocationIdealBitrate: Bandwidth? = if (config.useVlaTargetBitrate) {
+                singleAllocation.idealLayer?.targetBitrate ?: singleAllocation.idealLayer?.getBitrate(nowMs)
+            } else {
+                singleAllocation.idealLayer?.getBitrate(nowMs)
+            }
+
+            allocationIdealBitrate?.let {
+                totalIdealBitrate += it
+            }
+
+            if (singleAllocation.idealLayer != null && singleAllocation.idealLayer != singleAllocation.targetLayer) {
+                hasNonIdealLayer = true
             }
         }
 
@@ -207,7 +230,8 @@ class BitrateController<T : MediaSourceContainer> @JvmOverloads constructor(
         return BitrateControllerStatusSnapshot(
             currentTargetBps = totalTargetBitrate.bps.toLong(),
             currentIdealBps = totalIdealBitrate.bps.toLong(),
-            activeSsrcs = activeSsrcs
+            activeSsrcs = activeSsrcs,
+            hasNonIdealLayer = hasNonIdealLayer
         )
     }
 
@@ -220,26 +244,34 @@ class BitrateController<T : MediaSourceContainer> @JvmOverloads constructor(
 
         var totalTargetBps = 0.0
         var totalIdealBps = 0.0
+        var totalTargetVlaBps = 0.0
+        var totalIdealVlaBps = 0.0
 
         allocation.allocations.forEach {
             it.targetLayer?.getBitrate(nowMs)?.let { bitrate -> totalTargetBps += bitrate.bps }
             it.idealLayer?.getBitrate(nowMs)?.let { bitrate -> totalIdealBps += bitrate.bps }
+            it.targetLayer?.targetBitrate?.let { bitrate -> totalTargetVlaBps += bitrate.bps }
+            it.idealLayer?.targetBitrate?.let { bitrate -> totalIdealVlaBps += bitrate.bps }
             trace(
                 diagnosticContext
                     .makeTimeSeriesPoint("allocation_for_source", nowMs)
                     .addField("remote_endpoint_id", it.endpointId)
                     .addField("target_idx", it.targetLayer?.index ?: -1)
                     .addField("ideal_idx", it.idealLayer?.index ?: -1)
-                    .addField("target_bps", it.targetLayer?.getBitrate(nowMs)?.bps ?: -1)
-                    .addField("ideal_bps", it.idealLayer?.getBitrate(nowMs)?.bps ?: -1)
+                    .addField("target_bps_measured", it.targetLayer?.getBitrate(nowMs)?.bps ?: -1)
+                    .addField("target_bps_vla", it.targetLayer?.targetBitrate?.bps ?: -1)
+                    .addField("ideal_bps_measured", it.idealLayer?.getBitrate(nowMs)?.bps ?: -1)
+                    .addField("ideal_bps_vla", it.idealLayer?.targetBitrate?.bps ?: -1)
             )
         }
 
         trace(
             diagnosticContext
                 .makeTimeSeriesPoint("allocation", nowMs)
-                .addField("total_target_bps", totalTargetBps)
-                .addField("total_ideal_bps", totalIdealBps)
+                .addField("total_target_measured_bps", totalTargetBps)
+                .addField("total_ideal_measured_bps", totalIdealBps)
+                .addField("total_target_vla_bps", totalTargetVlaBps)
+                .addField("total_ideal_vla_bps", totalIdealVlaBps)
         )
     }
 
@@ -298,5 +330,6 @@ interface MediaSourceContainer {
 data class BitrateControllerStatusSnapshot(
     val currentTargetBps: Long = -1L,
     val currentIdealBps: Long = -1L,
-    val activeSsrcs: Collection<Long> = emptyList()
+    val activeSsrcs: Collection<Long> = emptyList(),
+    val hasNonIdealLayer: Boolean
 )

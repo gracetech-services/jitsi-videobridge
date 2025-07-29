@@ -16,6 +16,7 @@
 package org.jitsi.nlj.util
 
 import org.jitsi.rtp.Packet
+import org.jitsi.utils.OrderedJsonObject
 import java.time.Duration
 import java.util.Collections
 import java.util.function.Predicate
@@ -48,6 +49,10 @@ infix fun Int.floorMod(other: Int): Int {
     return Math.floorMod(this, other)
 }
 
+infix fun Long.floorMod(other: Long): Long {
+    return Math.floorMod(this, other)
+}
+
 /** Set the value at position [index] in a [MutableList] to [element].  If the list has fewer
  * than [index] entries, extend the intermediate entries between its current size and
  * [index] with [fillerElement].
@@ -68,6 +73,12 @@ inline fun getStackTrace(): String = with(StringBuffer()) {
         appendLine(ste.toString())
     }
     toString()
+}
+
+fun OrderedJsonObject.appendAll(other: OrderedJsonObject) = this.also {
+    other.forEach { (key, value) ->
+        this[key] = value
+    }
 }
 
 typealias PacketPredicate = Predicate<Packet>

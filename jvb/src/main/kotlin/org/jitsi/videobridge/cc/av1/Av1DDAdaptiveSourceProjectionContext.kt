@@ -41,6 +41,7 @@ import java.time.Instant
 class Av1DDAdaptiveSourceProjectionContext(
     private val diagnosticContext: DiagnosticContext,
     rtpState: RtpState,
+    persistentState: Any?,
     parentLogger: Logger
 ) : AdaptiveSourceProjectionContext {
     private val logger: Logger = createChildLogger(parentLogger)
@@ -56,11 +57,17 @@ class Av1DDAdaptiveSourceProjectionContext(
      */
     private val av1QualityFilter = Av1DDQualityFilter(av1FrameMaps, logger)
 
+    init {
+        require(persistentState is Av1PersistentState?)
+    }
+
     private var lastAv1FrameProjection = Av1DDFrameProjection(
         diagnosticContext,
         rtpState.ssrc,
         rtpState.maxSequenceNumber,
-        rtpState.maxTimestamp
+        rtpState.maxTimestamp,
+        (persistentState as? Av1PersistentState)?.frameNumber,
+        (persistentState as? Av1PersistentState)?.templateId
     )
 
     /**
@@ -68,7 +75,7 @@ class Av1DDAdaptiveSourceProjectionContext(
      * We can't send frames with frame number less than this, because we don't have
      * space in the projected sequence number/frame number counts.
      */
-    private var lastFrameNumberIndexResumption = -1
+    private var lastFrameNumberIndexResumption = -1L
 
     override fun accept(packetInfo: PacketInfo, targetIndex: Int): Boolean {
         val packet = packetInfo.packet
@@ -158,6 +165,8 @@ class Av1DDAdaptiveSourceProjectionContext(
                 .addField("targetIndex", Av1DDRtpLayerDesc.indexString(targetIndex))
                 .addField("new_frame", result.isNewFrame)
                 .addField("accept", accept)
+                .addField("payload_length", packet.payloadLength)
+                .addField("packet_length", packet.length)
             av1QualityFilter.addDiagnosticContext(pt)
             timeSeriesLogger.trace(pt)
         }
@@ -334,19 +343,15 @@ class Av1DDAdaptiveSourceProjectionContext(
 
         val frameNumber: Int
         val templateIdDelta: Int
-        if (lastAv1FrameProjection.av1Frame != null) {
+        val nextTemplateId = lastAv1FrameProjection.getNextTemplateId()
+        if (nextTemplateId != null) {
             frameNumber = RtpUtils.applySequenceNumberDelta(
                 lastAv1FrameProjection.frameNumber,
                 1
             )
-            val nextTemplateId = lastAv1FrameProjection.getNextTemplateId()
-            templateIdDelta = if (nextTemplateId != null) {
-                val structure = frame.structure
-                check(structure != null)
-                getTemplateIdDelta(nextTemplateId, structure.templateIdOffset)
-            } else {
-                0
-            }
+            val structure = frame.structure
+            check(structure != null)
+            templateIdDelta = getTemplateIdDelta(nextTemplateId, structure.templateIdOffset)
         } else {
             frameNumber = frame.frameNumber
             templateIdDelta = 0
@@ -651,6 +656,11 @@ class Av1DDAdaptiveSourceProjectionContext(
         lastAv1FrameProjection.timestamp
     )
 
+    override fun getPersistentState(): Any = Av1PersistentState(
+        lastAv1FrameProjection.frameNumber,
+        lastAv1FrameProjection.getNextTemplateId() ?: 0
+    )
+
     override fun getDebugState(): JSONObject {
         val debugState = JSONObject()
         debugState["class"] = Av1DDAdaptiveSourceProjectionContext::class.java.simpleName
@@ -676,3 +686,8 @@ class Av1DDAdaptiveSourceProjectionContext(
             TimeSeriesLogger.getTimeSeriesLogger(Av1DDAdaptiveSourceProjectionContext::class.java)
     }
 }
+
+data class Av1PersistentState(
+    val frameNumber: Int,
+    val templateId: Int
+)
