@@ -5,9 +5,9 @@ name: Java CI with Maven
 
 on:
   push:
-    branches: [ master ]
+    branches: [ gracetech ]
   pull_request:
-    branches: [ master ]
+    branches: [ gracetech ]
 
 env:
   # Java version to use for the release
