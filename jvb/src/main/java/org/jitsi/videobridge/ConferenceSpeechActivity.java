@@ -128,9 +128,27 @@ public class ConferenceSpeechActivity
         dominantSpeakerIdentification = new DominantSpeakerIdentification<>(silenceTimeoutMs);
 
         dominantSpeakerIdentification.addActiveSpeakerChangedListener(activeSpeakerChangedListener);
-        int numLoudestToTrack = LoudestConfig.Companion.getRouteLoudestOnly() ?
-                LoudestConfig.Companion.getNumLoudest() : 0;
-        dominantSpeakerIdentification.setLoudestConfig(numLoudestToTrack,
+        int numLoudestToTrack;
+        if (LoudestConfig.Companion.getRouteLoudestOnly())
+        {
+            if (LoudestConfig.Companion.getAlwaysRouteDominant())
+            {
+                // If we are always routing the dominant speaker, we need to
+                // track all speakers to identify the dominant one.
+                numLoudestToTrack = 200;
+            }
+            else
+            {
+                numLoudestToTrack = LoudestConfig.Companion.getNumLoudest();
+            }
+        }
+        else
+        {
+            numLoudestToTrack = 0;
+        }
+
+        dominantSpeakerIdentification.setLoudestConfig(
+                numLoudestToTrack,
                 (int)(LoudestConfig.Companion.getEnergyExpireTime().toMillis()),
                 LoudestConfig.Companion.getEnergyAlphaPct());
     }
